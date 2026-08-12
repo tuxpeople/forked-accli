@@ -1,6 +1,6 @@
 {
   "name": "@joargp/accli",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Apple Calendar CLI for macOS - manage calendars and events from the command line",
   "main": "lib/index.js",
   "bin": {
@@ -8,8 +8,8 @@
   },
   "scripts": {
     "test": "jest",
-    "prepack": "npm test",
-    "prepublishOnly": "npm test"
+    "prepack": "pnpm test",
+    "prepublishOnly": "pnpm test"
   },
   "keywords": [
     "apple",
@@ -38,5 +38,6 @@
   },
   "devDependencies": {
     "jest": "^29.7.0"
-  }
+  },
+  "packageManager": "pnpm@11.13.1"
 }

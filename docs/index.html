@@ -410,7 +410,7 @@
           </svg>
         </div>
         <h3>Agent-Ready</h3>
-        <p>Built for coding agents: structured JSON output, distinct exit codes, machine-readable errors, and persistent IDs.</p>
+        <p>Built for coding agents: JSON output by default, optional compact JSON, human output and interactive prompts via <code>--human</code>, distinct exit codes, machine-readable errors, and persistent IDs.</p>
       </div>
 
       <div class="feature-card">
@@ -482,8 +482,8 @@
           </div>
           <div class="terminal-line">
             <span class="terminal-prompt">$</span>
-            <span class="terminal-cmd">accli config set-default</span>
-            <span class="terminal-comment"># Set default calendar</span>
+            <span class="terminal-cmd">accli config set-default --human</span>
+            <span class="terminal-comment"># Interactively set default calendar</span>
           </div>
           <div class="terminal-line">
             <span class="terminal-prompt">$</span>
@@ -496,7 +496,7 @@
           </div>
           <div class="terminal-line">
             <span class="terminal-prompt">$</span>
-            <span class="terminal-cmd">accli freebusy --from 2025-01-15 --to 2025-01-16 --json</span>
+            <span class="terminal-cmd">accli freebusy --from 2025-01-15 --to 2025-01-16 --compact</span>
           </div>
         </div>
       </div>

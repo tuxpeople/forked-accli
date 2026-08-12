@@ -25,7 +25,7 @@ function parseArgs(args) {
       const key = arg.slice(2);
 
       // Handle boolean flags
-      if (key === 'json' || key === 'help' || key === 'version' || key === 'all-day' || key === 'no-all-day') {
+      if (key === 'json' || key === 'human' || key === 'compact' || key === 'help' || key === 'version' || key === 'all-day' || key === 'no-all-day') {
         result.flags[key] = true;
         i++;
         continue;
@@ -89,8 +89,12 @@ function isDateOnly(str) {
   return /^\d{4}-\d{2}-\d{2}$/.test(str);
 }
 
+function outputOptions(args) {
+  return { human: !!args.flags.human, compact: !!args.flags.compact };
+}
+
 // Show help
-function showHelp(command = null) {
+function showHelp(command = null, { stderr = false } = {}) {
   const globalHelp = `
 accli - Apple Calendar CLI for macOS
 
@@ -109,7 +113,9 @@ COMMANDS:
   config       Manage configuration (default calendar)
 
 GLOBAL OPTIONS:
-  --json       Output JSON (errors included as JSON)
+  --human      Output human-readable text and enable interactive prompts
+  --compact    Output JSON on a single line (ignored with --human)
+  --json       Backward-compatible no-op; JSON is the default
   --help       Show help information
   --version    Print version
 
@@ -119,7 +125,8 @@ DATETIME FORMATS:
 
 EXAMPLES:
   accli setup
-  accli calendars --json
+  accli calendars
+  accli calendars --human
   accli events Work --from 2025-01-01 --to 2025-01-31
   accli create Work --summary "Meeting" --start 2025-01-15T14:00 --end 2025-01-15T15:00
 `;
@@ -129,7 +136,12 @@ EXAMPLES:
 accli setup - Trigger macOS Calendar permission
 
 USAGE:
-  accli setup [--json]
+  accli setup [--human] [--compact] [--json]
+
+OPTIONS:
+  --human      Output human-readable text and enable interactive prompts
+  --compact    Output single-line JSON (ignored with --human)
+  --json       Backward-compatible no-op
 
 DESCRIPTION:
   Triggers the macOS Calendars permission prompt by accessing calendar data via EventKit.
@@ -139,20 +151,25 @@ DESCRIPTION:
 
 EXAMPLES:
   accli setup
-  accli setup --json
+  accli setup --human
 `,
     calendars: `
 accli calendars - List all calendars
 
 USAGE:
-  accli calendars [--json]
+  accli calendars [--human] [--compact] [--json]
+
+OPTIONS:
+  --human      Output human-readable text
+  --compact    Output single-line JSON (ignored with --human)
+  --json       Backward-compatible no-op
 
 DESCRIPTION:
   Lists all calendars with their names and persistent IDs.
 
 EXAMPLES:
   accli calendars
-  accli calendars --json
+  accli calendars --human
 `,
     events: `
 accli events - List events from a calendar
@@ -168,7 +185,9 @@ OPTIONS:
   --to <datetime>      End of range (default: from + 7 days)
   --max <n>            Maximum events to return (default: 50)
   --query <q>          Case-insensitive filter on summary/location/description
-  --json               Output JSON
+  --human              Output human-readable text
+  --compact            Output single-line JSON (ignored with --human)
+  --json               Backward-compatible no-op
 
 DATE RANGES:
   Date-only values are parsed at local midnight. For example,
@@ -189,11 +208,13 @@ OPTIONS:
   --calendar-id <id>        Persistent calendar ID (recommended)
   --calendar-index <index>  Unstable calendar index (deprecated)
   --calendar-name <name>    Calendar name (exact match)
-  --json               Output JSON
+  --human              Output human-readable text
+  --compact            Output single-line JSON (ignored with --human)
+  --json               Backward-compatible no-op
 
 EXAMPLES:
   accli event Work event-id-123
-  accli event --calendar-id "ABC123" event-id-123 --json
+  accli event --calendar-id "ABC123" event-id-123 --human
 `,
     create: `
 accli create - Create a new event
@@ -211,7 +232,9 @@ OPTIONS:
   --location <l>       Event location
   --description <d>    Event description
   --all-day            Create an all-day event
-  --json               Output JSON
+  --human              Output human-readable text
+  --compact            Output single-line JSON (ignored with --human)
+  --json               Backward-compatible no-op
 
 EXAMPLES:
   accli create Work --summary "Meeting" --start 2025-01-15T14:00 --end 2025-01-15T15:00
@@ -234,7 +257,9 @@ OPTIONS:
   --description <d>    New description
   --all-day            Convert to all-day event
   --no-all-day         Convert to timed event
-  --json               Output JSON
+  --human              Output human-readable text
+  --compact            Output single-line JSON (ignored with --human)
+  --json               Backward-compatible no-op
 
 EXAMPLES:
   accli update Work event-id-123 --summary "Updated meeting"
@@ -250,7 +275,9 @@ OPTIONS:
   --calendar-id <id>        Persistent calendar ID (recommended)
   --calendar-index <index>  Unstable calendar index (deprecated)
   --calendar-name <name>    Calendar name (exact match)
-  --json               Output JSON
+  --human              Output human-readable text
+  --compact            Output single-line JSON (ignored with --human)
+  --json               Backward-compatible no-op
 
 EXAMPLES:
   accli delete Work event-id-123
@@ -268,7 +295,9 @@ OPTIONS:
   --calendar-index <index>  Unstable calendar index (can be repeated)
   --from <datetime>    Start of range (required)
   --to <datetime>      End of range (required)
-  --json               Output JSON
+  --human              Output human-readable text
+  --compact            Output single-line JSON (ignored with --human)
+  --json               Backward-compatible no-op
 
 DESCRIPTION:
   Shows busy time slots across one or more calendars.
@@ -292,7 +321,9 @@ ACTIONS:
 OPTIONS (for set-default):
   --calendar <name>         Calendar name (non-interactive)
   --calendar-id <id>        Persistent calendar ID (non-interactive)
-  --json                    Output JSON
+  --human                   Output human-readable text and enable interactive selection
+  --compact                 Output single-line JSON (ignored with --human)
+  --json                    Backward-compatible no-op
 
 DESCRIPTION:
   Manages accli configuration stored in ~/.acclirc.
@@ -300,7 +331,7 @@ DESCRIPTION:
   will use it automatically if no calendar is specified.
 
 EXAMPLES:
-  accli config set-default                           # Interactive selection
+  accli config set-default --human                   # Interactive selection
   accli config set-default --calendar Work           # Set by name
   accli config set-default --calendar-id "ABC123..." # Set by ID
   accli config show
@@ -308,11 +339,8 @@ EXAMPLES:
 `,
   };
 
-  if (command && commandHelp[command]) {
-    console.log(commandHelp[command].trim());
-  } else {
-    console.log(globalHelp.trim());
-  }
+  const message = command && commandHelp[command] ? commandHelp[command] : globalHelp;
+  (stderr ? console.error : console.log)(message.trim());
 }
 
 function promptYesNo(question) {
@@ -335,17 +363,17 @@ function openCalendarsPrivacySettings() {
 
 // Main command handlers
 async function handleSetup(args) {
-  const result = await runScript('setup', { json: !!args.flags.json });
+  const result = await runScript('setup', {});
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatSetup,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
 
-    if (!args.flags.json && result.error && result.error.code === ERROR_CODES.NOT_AUTHORIZED) {
+    if (args.flags.human && result.error && result.error.code === ERROR_CODES.NOT_AUTHORIZED) {
       const shouldOpen = await promptYesNo(
         'Open System Settings > Privacy & Security > Calendars now? (Then click Options… and set Full Access, often for "osascript".) [y/N] '
       );
@@ -361,11 +389,11 @@ async function handleCalendars(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatCalendars,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -380,7 +408,7 @@ async function handleEvents(args) {
   if (calendarNamePositional && calendarNameFlag) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Specify calendar as positional <calendarName> or via --calendar-name, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -388,7 +416,7 @@ async function handleEvents(args) {
   if (calendarIndexes.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-index is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -396,7 +424,7 @@ async function handleEvents(args) {
   if (calendarIds.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-id is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -411,14 +439,14 @@ async function handleEvents(args) {
   if (resolvedCalendarId && resolvedCalendarIndex) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Use either --calendar-id or --calendar-index, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
   // Backward compatibility: numeric --calendar-id used to be an index
   if (resolvedCalendarId && /^\d+$/.test(resolvedCalendarId) && !resolvedCalendarIndex) {
-    if (!args.flags.json) {
+    if (args.flags.human) {
       console.error('Warning: numeric --calendar-id is deprecated; use --calendar-index or a persistent --calendar-id from `accli calendars`.');
     }
     resolvedCalendarIndex = resolvedCalendarId;
@@ -433,7 +461,7 @@ async function handleEvents(args) {
     } else {
       output.outputError(
         { code: ERROR_CODES.MISSING_REQUIRED, message: 'Calendar name, --calendar-name, --calendar-id, or --calendar-index is required (or set a default with `accli config set-default`)' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -443,7 +471,7 @@ async function handleEvents(args) {
   if (args.flags.from && !isValidDatetime(args.flags.from)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --from datetime: ${args.flags.from}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -451,7 +479,7 @@ async function handleEvents(args) {
   if (args.flags.to && !isValidDatetime(args.flags.to)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --to datetime: ${args.flags.to}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -470,11 +498,11 @@ async function handleEvents(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatEvents,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -488,7 +516,7 @@ async function handleEvent(args) {
   if (calendarIndexes.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-index is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -496,7 +524,7 @@ async function handleEvent(args) {
   if (calendarIds.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-id is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -510,13 +538,13 @@ async function handleEvent(args) {
   if (resolvedCalendarId && resolvedCalendarIndex) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Use either --calendar-id or --calendar-index, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
   if (resolvedCalendarId && /^\d+$/.test(resolvedCalendarId) && !resolvedCalendarIndex) {
-    if (!args.flags.json) {
+    if (args.flags.human) {
       console.error('Warning: numeric --calendar-id is deprecated; use --calendar-index or a persistent --calendar-id from `accli calendars`.');
     }
     resolvedCalendarIndex = resolvedCalendarId;
@@ -542,7 +570,7 @@ async function handleEvent(args) {
     if (calendarFromFlags) {
       output.outputError(
         { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Too many positional arguments. When using --calendar-id/--calendar-index/--calendar-name, only provide <eventId>' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -571,7 +599,7 @@ async function handleEvent(args) {
     } else {
       output.outputError(
         { code: ERROR_CODES.MISSING_REQUIRED, message: 'Calendar name, --calendar-name, --calendar-id, or --calendar-index is required (or set a default with `accli config set-default`)' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -580,7 +608,7 @@ async function handleEvent(args) {
   if (!eventId) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: 'Event ID is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -596,11 +624,11 @@ async function handleEvent(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatEventDetail,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -615,7 +643,7 @@ async function handleCreate(args) {
   if (calendarNamePositional && calendarNameFlag) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Specify calendar as positional <calendarName> or via --calendar-name, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -623,7 +651,7 @@ async function handleCreate(args) {
   if (calendarIndexes.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-index is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -631,7 +659,7 @@ async function handleCreate(args) {
   if (calendarIds.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-id is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -646,13 +674,13 @@ async function handleCreate(args) {
   if (resolvedCalendarId && resolvedCalendarIndex) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Use either --calendar-id or --calendar-index, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
   if (resolvedCalendarId && /^\d+$/.test(resolvedCalendarId) && !resolvedCalendarIndex) {
-    if (!args.flags.json) {
+    if (args.flags.human) {
       console.error('Warning: numeric --calendar-id is deprecated; use --calendar-index or a persistent --calendar-id from `accli calendars`.');
     }
     resolvedCalendarIndex = resolvedCalendarId;
@@ -667,7 +695,7 @@ async function handleCreate(args) {
     } else {
       output.outputError(
         { code: ERROR_CODES.MISSING_REQUIRED, message: 'Calendar name, --calendar-name, --calendar-id, or --calendar-index is required (or set a default with `accli config set-default`)' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -676,7 +704,7 @@ async function handleCreate(args) {
   if (!args.flags.summary) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--summary is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -684,7 +712,7 @@ async function handleCreate(args) {
   if (!args.flags.start) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--start is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -692,7 +720,7 @@ async function handleCreate(args) {
   if (!args.flags.end) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--end is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -701,7 +729,7 @@ async function handleCreate(args) {
   if (!isValidDatetime(args.flags.start)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --start datetime: ${args.flags.start}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -709,7 +737,7 @@ async function handleCreate(args) {
   if (!isValidDatetime(args.flags.end)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --end datetime: ${args.flags.end}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -721,7 +749,7 @@ async function handleCreate(args) {
     if (!isDateOnly(args.flags.start) || !isDateOnly(args.flags.end)) {
       output.outputError(
         { code: ERROR_CODES.INVALID_DATETIME, message: '--all-day requires YYYY-MM-DD format for --start and --end' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -743,11 +771,11 @@ async function handleCreate(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatCreate,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -761,7 +789,7 @@ async function handleUpdate(args) {
   if (calendarIndexes.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-index is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -769,7 +797,7 @@ async function handleUpdate(args) {
   if (calendarIds.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-id is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -783,13 +811,13 @@ async function handleUpdate(args) {
   if (resolvedCalendarId && resolvedCalendarIndex) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Use either --calendar-id or --calendar-index, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
   if (resolvedCalendarId && /^\d+$/.test(resolvedCalendarId) && !resolvedCalendarIndex) {
-    if (!args.flags.json) {
+    if (args.flags.human) {
       console.error('Warning: numeric --calendar-id is deprecated; use --calendar-index or a persistent --calendar-id from `accli calendars`.');
     }
     resolvedCalendarIndex = resolvedCalendarId;
@@ -815,7 +843,7 @@ async function handleUpdate(args) {
     if (calendarFromFlags) {
       output.outputError(
         { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Too many positional arguments. When using --calendar-id/--calendar-index/--calendar-name, only provide <eventId>' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -844,7 +872,7 @@ async function handleUpdate(args) {
     } else {
       output.outputError(
         { code: ERROR_CODES.MISSING_REQUIRED, message: 'Calendar name, --calendar-name, --calendar-id, or --calendar-index is required (or set a default with `accli config set-default`)' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -853,7 +881,7 @@ async function handleUpdate(args) {
   if (!eventId) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: 'Event ID is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -862,7 +890,7 @@ async function handleUpdate(args) {
   if (args.flags.start && !isValidDatetime(args.flags.start)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --start datetime: ${args.flags.start}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -870,7 +898,7 @@ async function handleUpdate(args) {
   if (args.flags.end && !isValidDatetime(args.flags.end)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --end datetime: ${args.flags.end}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -894,11 +922,11 @@ async function handleUpdate(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatUpdate,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -912,7 +940,7 @@ async function handleDelete(args) {
   if (calendarIndexes.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-index is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -920,7 +948,7 @@ async function handleDelete(args) {
   if (calendarIds.length > 1) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Only one --calendar-id is allowed for this command' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -934,13 +962,13 @@ async function handleDelete(args) {
   if (resolvedCalendarId && resolvedCalendarIndex) {
     output.outputError(
       { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Use either --calendar-id or --calendar-index, not both' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
   if (resolvedCalendarId && /^\d+$/.test(resolvedCalendarId) && !resolvedCalendarIndex) {
-    if (!args.flags.json) {
+    if (args.flags.human) {
       console.error('Warning: numeric --calendar-id is deprecated; use --calendar-index or a persistent --calendar-id from `accli calendars`.');
     }
     resolvedCalendarIndex = resolvedCalendarId;
@@ -966,7 +994,7 @@ async function handleDelete(args) {
     if (calendarFromFlags) {
       output.outputError(
         { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Too many positional arguments. When using --calendar-id/--calendar-index/--calendar-name, only provide <eventId>' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -995,7 +1023,7 @@ async function handleDelete(args) {
     } else {
       output.outputError(
         { code: ERROR_CODES.MISSING_REQUIRED, message: 'Calendar name, --calendar-name, --calendar-id, or --calendar-index is required (or set a default with `accli config set-default`)' },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
@@ -1004,7 +1032,7 @@ async function handleDelete(args) {
   if (!eventId) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: 'Event ID is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1020,11 +1048,11 @@ async function handleDelete(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatDelete,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -1038,7 +1066,7 @@ async function handleFreeBusy(args) {
   if (calendars.length === 0 && calendarIds.length === 0 && calendarIndexes.length === 0) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: 'At least one --calendar, --calendar-id, or --calendar-index is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1046,7 +1074,7 @@ async function handleFreeBusy(args) {
   if (!args.flags.from) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--from is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1054,7 +1082,7 @@ async function handleFreeBusy(args) {
   if (!args.flags.to) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--to is required' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1063,7 +1091,7 @@ async function handleFreeBusy(args) {
   if (!isValidDatetime(args.flags.from)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --from datetime: ${args.flags.from}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1071,7 +1099,7 @@ async function handleFreeBusy(args) {
   if (!isValidDatetime(args.flags.to)) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --to datetime: ${args.flags.to}` },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1088,11 +1116,11 @@ async function handleFreeBusy(args) {
 
   if (result.success) {
     output.output(result.data, {
-      json: args.flags.json,
+      ...outputOptions(args),
       formatter: output.formatFreeBusy,
     });
   } else {
-    output.outputError(result.error, { json: args.flags.json });
+    output.outputError(result.error, outputOptions(args));
   }
 
   process.exit(result.exitCode);
@@ -1104,7 +1132,7 @@ async function handleConfig(args) {
   if (!action) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: 'Config action required: set-default, show, or clear' },
-      { json: args.flags.json }
+      outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1119,7 +1147,7 @@ async function handleConfig(args) {
         // Fetch calendars to validate and get info
         const result = await runScript('calendars', {});
         if (!result.success) {
-          output.outputError(result.error, { json: args.flags.json });
+          output.outputError(result.error, outputOptions(args));
           process.exit(result.exitCode);
         }
 
@@ -1131,7 +1159,7 @@ async function handleConfig(args) {
           if (!selectedCalendar) {
             output.outputError(
               { code: ERROR_CODES.CALENDAR_NOT_FOUND, message: `Calendar with ID "${calendarId}" not found` },
-              { json: args.flags.json }
+              outputOptions(args)
             );
             process.exit(EXIT_VALIDATION_ERROR);
           }
@@ -1140,7 +1168,7 @@ async function handleConfig(args) {
           if (matches.length === 0) {
             output.outputError(
               { code: ERROR_CODES.CALENDAR_NOT_FOUND, message: `Calendar "${calendarName}" not found` },
-              { json: args.flags.json }
+              outputOptions(args)
             );
             process.exit(EXIT_VALIDATION_ERROR);
           }
@@ -1148,7 +1176,7 @@ async function handleConfig(args) {
             const ids = matches.map((c) => c.id).join(', ');
             output.outputError(
               { code: ERROR_CODES.AMBIGUOUS_CALENDAR, message: `Multiple calendars named "${calendarName}". Use --calendar-id with one of: ${ids}` },
-              { json: args.flags.json }
+              outputOptions(args)
             );
             process.exit(EXIT_VALIDATION_ERROR);
           }
@@ -1157,26 +1185,26 @@ async function handleConfig(args) {
 
         config.setDefaultCalendarId(selectedCalendar.id);
 
-        if (args.flags.json) {
-          output.output({ defaultCalendar: { id: selectedCalendar.id, name: selectedCalendar.name } }, { json: true });
-        } else {
+        if (args.flags.human) {
           console.log(`Default calendar set to "${selectedCalendar.name}"`);
+        } else {
+          output.output({ defaultCalendar: { id: selectedCalendar.id, name: selectedCalendar.name } }, outputOptions(args));
         }
         process.exit(0);
       }
 
       // Interactive mode: prompt user to select
-      if (!process.stdin.isTTY) {
+      if (!args.flags.human || !process.stdin.isTTY) {
         output.outputError(
           { code: ERROR_CODES.MISSING_REQUIRED, message: 'Non-interactive mode requires --calendar or --calendar-id' },
-          { json: args.flags.json }
+          outputOptions(args)
         );
         process.exit(EXIT_VALIDATION_ERROR);
       }
 
       const result = await runScript('calendars', {});
       if (!result.success) {
-        output.outputError(result.error, { json: args.flags.json });
+        output.outputError(result.error, outputOptions(args));
         process.exit(result.exitCode);
       }
 
@@ -1184,7 +1212,7 @@ async function handleConfig(args) {
       if (calendars.length === 0) {
         output.outputError(
           { code: ERROR_CODES.CALENDAR_NOT_FOUND, message: 'No calendars found' },
-          { json: args.flags.json }
+          outputOptions(args)
         );
         process.exit(EXIT_VALIDATION_ERROR);
       }
@@ -1204,7 +1232,7 @@ async function handleConfig(args) {
       if (isNaN(index) || index < 0 || index >= calendars.length) {
         output.outputError(
           { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Invalid selection' },
-          { json: args.flags.json }
+          outputOptions(args)
         );
         process.exit(EXIT_VALIDATION_ERROR);
       }
@@ -1219,10 +1247,10 @@ async function handleConfig(args) {
       const defaultId = config.getDefaultCalendarId();
 
       if (!defaultId) {
-        if (args.flags.json) {
-          output.output({ defaultCalendar: null }, { json: true });
-        } else {
+        if (args.flags.human) {
           console.log('No default calendar set');
+        } else {
+          output.output({ defaultCalendar: null }, outputOptions(args));
         }
         process.exit(0);
       }
@@ -1230,16 +1258,16 @@ async function handleConfig(args) {
       // Fetch calendars to get the name
       const result = await runScript('calendars', {});
       if (!result.success) {
-        output.outputError(result.error, { json: args.flags.json });
+        output.outputError(result.error, outputOptions(args));
         process.exit(result.exitCode);
       }
 
       const calendar = result.data.calendars.find((c) => c.id === defaultId);
 
-      if (args.flags.json) {
+      if (!args.flags.human) {
         output.output({
           defaultCalendar: calendar ? { id: defaultId, name: calendar.name } : { id: defaultId, name: null },
-        }, { json: true });
+        }, outputOptions(args));
       } else {
         if (calendar) {
           console.log(`Default calendar: ${calendar.name} (${defaultId})`);
@@ -1253,10 +1281,10 @@ async function handleConfig(args) {
     case 'clear': {
       config.clearDefaultCalendar();
 
-      if (args.flags.json) {
-        output.output({ cleared: true }, { json: true });
-      } else {
+      if (args.flags.human) {
         console.log('Default calendar cleared');
+      } else {
+        output.output({ cleared: true }, outputOptions(args));
       }
       process.exit(0);
     }
@@ -1264,7 +1292,7 @@ async function handleConfig(args) {
     default:
       output.outputError(
         { code: ERROR_CODES.INVALID_ARGUMENT, message: `Unknown config action: ${action}. Use set-default, show, or clear` },
-        { json: args.flags.json }
+        outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
   }
@@ -1274,11 +1302,12 @@ async function handleConfig(args) {
 async function main() {
   const parseResult = parseArgs(process.argv.slice(2));
 
-  // Handle parse errors with JSON support
+  // Parsing errors follow the same output policy as operational errors.
   if (!parseResult.ok) {
-    // Check if --json was passed before the error occurred
-    const hasJson = process.argv.includes('--json');
-    output.outputError(parseResult.error, { json: hasJson });
+    output.outputError(parseResult.error, {
+      human: process.argv.includes('--human'),
+      compact: process.argv.includes('--compact'),
+    });
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
@@ -1339,13 +1368,21 @@ async function main() {
       await handleConfig(args);
       break;
     default:
-      console.error(`Unknown command: ${args.command}`);
-      showHelp();
+      output.outputError(
+        { code: ERROR_CODES.INVALID_ARGUMENT, message: `Unknown command: ${args.command}` },
+        outputOptions(args)
+      );
+      if (args.flags.human) {
+        showHelp(null, { stderr: true });
+      }
       process.exit(EXIT_VALIDATION_ERROR);
   }
 }
 
 main().catch((err) => {
-  console.error('Unexpected error:', err.message);
+  output.outputError(
+    { code: ERROR_CODES.INTERNAL_ERROR, message: err && err.message ? err.message : 'Unexpected internal error' },
+    { human: process.argv.includes('--human'), compact: process.argv.includes('--compact') }
+  );
   process.exit(1);
 });

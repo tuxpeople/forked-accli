@@ -80,10 +80,36 @@ describe('lib/output formatting', () => {
   test('outputError prints NOT_AUTHORIZED tip in human mode', () => {
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      output.outputError({ code: 'NOT_AUTHORIZED', message: 'no' }, { json: false });
+      output.outputError({ code: 'NOT_AUTHORIZED', message: 'no' }, { human: true });
       expect(spy.mock.calls.map((c) => c.join(' ')).join('\n')).toMatch(/Tip:/);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  test('output uses pretty JSON by default and compact JSON when requested', () => {
+    const spy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      output.output({ calendar: 'Work' });
+      output.output({ calendar: 'Work' }, { compact: true });
+      expect(spy.mock.calls[0][0]).toBe('{\n  "calendar": "Work"\n}');
+      expect(spy.mock.calls[1][0]).toBe('{"calendar":"Work"}');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('outputError uses JSON stdout by default and human stderr on request', () => {
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      output.outputError({ code: 'INVALID_ARGUMENT', message: 'bad' });
+      output.outputError({ code: 'INVALID_ARGUMENT', message: 'bad' }, { human: true });
+      expect(log.mock.calls[0][0]).toBe('{\n  "ok": false,\n  "error": {\n    "code": "INVALID_ARGUMENT",\n    "message": "bad"\n  }\n}');
+      expect(error.mock.calls[0][0]).toBe('Error [INVALID_ARGUMENT]: bad');
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
     }
   });
 });

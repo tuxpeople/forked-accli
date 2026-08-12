@@ -39,7 +39,14 @@ Run `accli <command> --help` for command-specific options.
 
 ## JSON output
 
-Add `--json` to most commands to output JSON (including errors).
+Operational commands emit pretty-printed JSON by default, including errors (to stdout).
+Use `--compact` for single-line JSON. `--json` remains accepted as a
+backward-compatible no-op.
+
+Use `--human` for the original human-readable output. Human errors are written
+to stderr, and interactive setup and `config set-default` selection are only
+enabled with this flag. When both `--human` and `--json` are supplied,
+`--human` wins. `--help` and `--version` always use plain text.
 
 ## Date ranges
 
@@ -49,7 +56,7 @@ February 28 too, use `--to 2026-03-01` or pass an explicit end time.
 
 ## Agent-Ready
 
-Designed for coding agents and automation: structured `--json` output on all commands, distinct exit codes (0=success, 1=runtime, 2=validation, 10=auth), machine-readable error codes, and persistent calendar IDs for reliable targeting.
+Designed for coding agents and automation: structured JSON output on all operational commands, distinct exit codes (0=success, 1=runtime, 2=validation, 10=auth), machine-readable error codes, and persistent calendar IDs for reliable targeting.
 
 ## Notes
 
