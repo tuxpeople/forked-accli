@@ -3,6 +3,10 @@
 const output = require('../lib/output');
 
 describe('lib/output formatting', () => {
+  test('exports terminal escaping for human-only command paths', () => {
+    expect(output.escapeTerminalText('Name\x1b[31m\nSource\r\tID\u009b')).toBe('Name\\x1b[31m\\nSource\\r\\tID\\u009b');
+  });
+
   test('formatCalendars includes key fields', () => {
     const text = output.formatCalendars({
       calendars: [
@@ -107,6 +111,56 @@ describe('lib/output formatting', () => {
       output.outputError({ code: 'INVALID_ARGUMENT', message: 'bad' }, { human: true });
       expect(log.mock.calls[0][0]).toBe('{\n  "ok": false,\n  "error": {\n    "code": "INVALID_ARGUMENT",\n    "message": "bad"\n  }\n}');
       expect(error.mock.calls[0][0]).toBe('Error [INVALID_ARGUMENT]: bad');
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  test('escapes terminal controls in every human formatter family while preserving Unicode', () => {
+    const ansi = '\x1b[31mred\x1b[0m';
+    const osc = '\x1b]8;;https://example.test\x07link\x1b]8;;\x07';
+    const controls = `line\nnext\rreset\tcolumn\u009bDEL\x7f`;
+    const outputs = [
+      output.formatCalendars({ calendars: [{ name: ansi, source: osc, id: controls, index: '\u009b', writable: true }] }),
+      output.formatEvents({ count: 1, events: [{ summary: ansi, calendar: osc, start: controls, end: controls, location: controls, description: `${controls}😀`, id: controls }] }),
+      output.formatSetup({ ok: true, message: controls, calendars: [ansi, 'Møte 😀'] }),
+      output.formatUpdate({ ok: true, event: { summary: 'Møte 😀', start: controls, end: controls, id: controls }, warning: osc }),
+      output.formatDelete({ ok: true, deleted: { calendar: ansi }, warning: controls }),
+      output.formatFreeBusy({ calendarsNotFound: [ansi], busy: [{ start: controls, end: controls, summary: osc, calendar: 'Møte 😀' }] }),
+      output.formatError({ code: ansi, message: controls }),
+    ];
+
+    for (const text of outputs) {
+      expect(text).not.toMatch(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F-\x9F]/);
+      expect(text).toContain('\\x1b');
+    }
+    expect(outputs.join('\n')).toContain('Møte 😀');
+    expect(outputs[1].split('\n')).not.toContain('next');
+  });
+
+  test('keeps raw controls in JSON while escaping explicit human output and errors', () => {
+    const payload = { value: '\x1b[31mred\x1b[0m\nnext' };
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      output.output(payload);
+      expect(JSON.parse(log.mock.calls[0][0])).toEqual(payload);
+
+      output.output(payload, {
+        human: true,
+        formatter: (data) => output.formatEventDetail({
+          event: { summary: data.value, start: '2025-01-01T10:00', end: '2025-01-01T11:00', id: 'event-1' },
+        }),
+      });
+      expect(log.mock.calls[1][0]).toContain('\\x1b[31mred\\x1b[0m\\nnext');
+
+      output.outputError({ code: '\x1b[31mBAD', message: payload.value });
+      expect(JSON.parse(log.mock.calls[2][0]).error.message).toBe(payload.value);
+
+      output.outputError({ code: '\x1b[31mBAD', message: payload.value }, { human: true });
+      expect(error.mock.calls[0][0]).toContain('\\x1b');
+      expect(error.mock.calls[0][0]).not.toContain('\x1b');
     } finally {
       log.mockRestore();
       error.mockRestore();

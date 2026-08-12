@@ -4,8 +4,77 @@
 const { runScript, ERROR_CODES, EXIT_VALIDATION_ERROR } = require('../lib/jxa-runner');
 const output = require('../lib/output');
 const config = require('../lib/config');
+const { parseLocalDateTime, isNonNegativeInteger, parseEventLimit, validateOrderedRange, validateUpdateRange } = require('../lib/validation');
 const { spawnSync } = require('child_process');
 const readline = require('readline');
+
+const GLOBAL_BOOLEAN_FLAGS = ['help', 'version', 'human', 'compact', 'json'];
+const VALUE_FLAGS = new Set([
+  'calendar', 'calendar-id', 'calendar-index', 'calendar-name',
+  'from', 'to', 'max', 'query', 'summary', 'start', 'end', 'location', 'description',
+]);
+
+// Keep the accepted CLI surface next to parsing/dispatch so handlers never
+// silently ignore a typo or surplus input. Calendar selectors are deliberately
+// repeatable only for freebusy.
+const COMMAND_CONTRACTS = {
+  setup: { booleanFlags: [], scalarFlags: [], repeatableFlags: [], minPositionals: 0, maxPositionals: 0 },
+  calendars: { booleanFlags: [], scalarFlags: [], repeatableFlags: [], minPositionals: 0, maxPositionals: 0 },
+  events: {
+    booleanFlags: [],
+    scalarFlags: ['calendar-name', 'from', 'to', 'max', 'query'],
+    repeatableFlags: ['calendar-id', 'calendar-index'],
+    minPositionals: 0,
+    maxPositionals: 1,
+    calendarSelector: 'leading',
+  },
+  event: {
+    booleanFlags: [],
+    scalarFlags: ['calendar-name'],
+    repeatableFlags: ['calendar-id', 'calendar-index'],
+    minPositionals: 0,
+    maxPositionals: 2,
+    calendarSelector: 'event-target',
+  },
+  create: {
+    booleanFlags: ['all-day'],
+    scalarFlags: ['calendar-name', 'summary', 'start', 'end', 'location', 'description'],
+    repeatableFlags: ['calendar-id', 'calendar-index'],
+    minPositionals: 0,
+    maxPositionals: 1,
+    calendarSelector: 'leading',
+  },
+  update: {
+    booleanFlags: ['all-day', 'no-all-day'],
+    scalarFlags: ['calendar-name', 'summary', 'start', 'end', 'location', 'description'],
+    repeatableFlags: ['calendar-id', 'calendar-index'],
+    minPositionals: 0,
+    maxPositionals: 2,
+    calendarSelector: 'event-target',
+  },
+  delete: {
+    booleanFlags: [],
+    scalarFlags: ['calendar-name'],
+    repeatableFlags: ['calendar-id', 'calendar-index'],
+    minPositionals: 0,
+    maxPositionals: 2,
+    calendarSelector: 'event-target',
+  },
+  freebusy: {
+    booleanFlags: [],
+    scalarFlags: ['from', 'to'],
+    repeatableFlags: ['calendar', 'calendar-id', 'calendar-index'],
+    minPositionals: 0,
+    maxPositionals: 0,
+  },
+  config: {
+    booleanFlags: [],
+    scalarFlags: [],
+    repeatableFlags: ['calendar', 'calendar-id'],
+    minPositionals: 0,
+    maxPositionals: 1,
+  },
+};
 
 // Parse command line arguments
 // Returns { ok: true, result: {...} } or { ok: false, error: {...} }
@@ -15,6 +84,7 @@ function parseArgs(args) {
     positional: [],
     flags: {},
     arrays: {},
+    flagCounts: {},
   };
 
   let i = 0;
@@ -48,6 +118,15 @@ function parseArgs(args) {
         continue;
       }
 
+      // An unknown valueless flag must reach command-contract validation as
+      // unknown, rather than being misreported as a missing known value.
+      if (!VALUE_FLAGS.has(key) && (args[i + 1] === undefined || args[i + 1].startsWith('--'))) {
+        result.flags[key] = true;
+        result.flagCounts[key] = (result.flagCounts[key] || 0) + 1;
+        i++;
+        continue;
+      }
+
       // Handle key-value flags
       const value = args[i + 1];
       if (value === undefined || value.startsWith('--')) {
@@ -57,6 +136,7 @@ function parseArgs(args) {
         };
       }
       result.flags[key] = value;
+      result.flagCounts[key] = (result.flagCounts[key] || 0) + 1;
       i += 2;
     } else if (!result.command) {
       result.command = arg;
@@ -70,27 +150,97 @@ function parseArgs(args) {
   return { ok: true, result };
 }
 
-// Validate datetime format
-function isValidDatetime(str) {
-  // Date only: YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-    const date = new Date(str + 'T00:00:00');
-    return !isNaN(date.getTime());
-  }
-  // Datetime: YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)) {
-    const date = new Date(str);
-    return !isNaN(date.getTime());
-  }
-  return false;
+function invalidArgument(message) {
+  return { code: ERROR_CODES.INVALID_ARGUMENT, message };
 }
 
-function isDateOnly(str) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(str);
+function validateCommandContract(args) {
+  const contract = COMMAND_CONTRACTS[args.command];
+  if (!contract) return null;
+
+  const allowedBooleanFlags = new Set([...GLOBAL_BOOLEAN_FLAGS, ...contract.booleanFlags]);
+  const allowedScalarFlags = new Set(contract.scalarFlags);
+  const allowedRepeatableFlags = new Set(contract.repeatableFlags);
+
+  for (const key of Object.keys(args.flags)) {
+    if (!allowedBooleanFlags.has(key) && !allowedScalarFlags.has(key)) {
+      return invalidArgument(`Unknown flag: --${key}`);
+    }
+  }
+  for (const key of Object.keys(args.arrays)) {
+    if (!allowedRepeatableFlags.has(key)) {
+      return invalidArgument(`Unknown flag: --${key}`);
+    }
+  }
+
+  for (const key of contract.scalarFlags) {
+    if ((args.flagCounts[key] || 0) > 1) {
+      return invalidArgument(`Flag may only be specified once: --${key}`);
+    }
+  }
+
+  if (args.positional.length < contract.minPositionals || args.positional.length > contract.maxPositionals) {
+    return invalidArgument(`Expected ${contract.minPositionals === contract.maxPositionals ? contract.maxPositionals : `${contract.minPositionals}-${contract.maxPositionals}`} positional argument(s) for ${args.command}`);
+  }
+
+  if (args.flags['all-day'] && args.flags['no-all-day']) {
+    return invalidArgument('Use either --all-day or --no-all-day, not both');
+  }
+
+  const calendarName = args.flags['calendar-name'];
+  const calendarIds = args.arrays['calendar-id'] || [];
+  const calendarIndexes = args.arrays['calendar-index'] || [];
+  for (const index of calendarIndexes) {
+    if (!isNonNegativeInteger(index)) {
+      return invalidArgument(`Invalid --calendar-index: ${index}`);
+    }
+  }
+  if (contract.calendarSelector) {
+    if (calendarIds.length > 1) {
+      return invalidArgument('Only one --calendar-id is allowed for this command');
+    }
+    if (calendarIndexes.length > 1) {
+      return invalidArgument('Only one --calendar-index is allowed for this command');
+    }
+    if (calendarName && (calendarIds.length || calendarIndexes.length)) {
+      return invalidArgument('Use only one calendar selector: --calendar-name, --calendar-id, or --calendar-index');
+    }
+    if (calendarIds.length && calendarIndexes.length) {
+      return invalidArgument('Use either --calendar-id or --calendar-index, not both');
+    }
+    const hasFlagSelector = !!calendarName || calendarIds.length > 0 || calendarIndexes.length > 0;
+    const hasPositionalCalendar = contract.calendarSelector === 'leading'
+      ? args.positional.length > 0
+      : args.positional.length === 2;
+    if (hasPositionalCalendar && hasFlagSelector) {
+      return invalidArgument('Specify a calendar either positionally or with a calendar selector flag, not both');
+    }
+  }
+
+  if (args.command === 'config') {
+    const action = args.positional[0];
+    const calendars = args.arrays.calendar || [];
+    if (action === 'set-default') {
+      if (calendars.length > 1 || calendarIds.length > 1) {
+        return invalidArgument('Only one --calendar or --calendar-id is allowed for config set-default');
+      }
+      if (calendars.length && calendarIds.length) {
+        return invalidArgument('Use either --calendar or --calendar-id for config set-default, not both');
+      }
+    } else if ((action === 'show' || action === 'clear') && (calendars.length || calendarIds.length)) {
+      return invalidArgument(`config ${action} does not accept calendar selectors`);
+    }
+  }
+
+  return null;
 }
 
 function outputOptions(args) {
   return { human: !!args.flags.human, compact: !!args.flags.compact };
+}
+
+function hasFlag(args, key) {
+  return Object.prototype.hasOwnProperty.call(args.flags, key);
 }
 
 // Show help
@@ -467,8 +617,9 @@ async function handleEvents(args) {
     }
   }
 
-  // Validate datetime formats
-  if (args.flags.from && !isValidDatetime(args.flags.from)) {
+  const from = hasFlag(args, 'from') ? parseLocalDateTime(args.flags.from) : null;
+  const to = hasFlag(args, 'to') ? parseLocalDateTime(args.flags.to) : null;
+  if (from && !from.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --from datetime: ${args.flags.from}` },
       outputOptions(args)
@@ -476,9 +627,26 @@ async function handleEvents(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (args.flags.to && !isValidDatetime(args.flags.to)) {
+  if (to && !to.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --to datetime: ${args.flags.to}` },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+
+  if (!validateOrderedRange(from, to)) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_RANGE, message: '--from must be before --to' },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+
+  const max = args.flags.max === undefined ? 50 : parseEventLimit(args.flags.max);
+  if (max === null) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_ARGUMENT, message: '--max must be an integer from 0 to 10000' },
       outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
@@ -490,7 +658,7 @@ async function handleEvents(args) {
     calendarIndex: resolvedCalendarIndex,
     from: args.flags.from || null,
     to: args.flags.to || null,
-    max: args.flags.max ? parseInt(args.flags.max, 10) : 50,
+    max,
     query: args.flags.query || null,
   };
 
@@ -709,7 +877,7 @@ async function handleCreate(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (!args.flags.start) {
+  if (!hasFlag(args, 'start')) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--start is required' },
       outputOptions(args)
@@ -717,7 +885,7 @@ async function handleCreate(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (!args.flags.end) {
+  if (!hasFlag(args, 'end')) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--end is required' },
       outputOptions(args)
@@ -725,8 +893,9 @@ async function handleCreate(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  // Validate datetime formats
-  if (!isValidDatetime(args.flags.start)) {
+  const start = parseLocalDateTime(args.flags.start);
+  const end = parseLocalDateTime(args.flags.end);
+  if (!start.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --start datetime: ${args.flags.start}` },
       outputOptions(args)
@@ -734,7 +903,7 @@ async function handleCreate(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (!isValidDatetime(args.flags.end)) {
+  if (!end.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --end datetime: ${args.flags.end}` },
       outputOptions(args)
@@ -744,15 +913,24 @@ async function handleCreate(args) {
 
   const allDay = args.flags['all-day'] || false;
 
-  // Validate all-day format
   if (allDay) {
-    if (!isDateOnly(args.flags.start) || !isDateOnly(args.flags.end)) {
+    if (start.kind !== 'date' || end.kind !== 'date') {
       output.outputError(
         { code: ERROR_CODES.INVALID_DATETIME, message: '--all-day requires YYYY-MM-DD format for --start and --end' },
         outputOptions(args)
       );
       process.exit(EXIT_VALIDATION_ERROR);
     }
+  }
+
+  const effectiveEnd = new Date(end.date.getTime());
+  if (allDay) effectiveEnd.setDate(effectiveEnd.getDate() + 1);
+  if (!validateOrderedRange(start.date, effectiveEnd)) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_RANGE, message: allDay ? 'Start date must not be after end date' : 'Start must be before end' },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
   }
 
   const scriptArgs = {
@@ -886,8 +1064,9 @@ async function handleUpdate(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  // Validate datetime formats if provided
-  if (args.flags.start && !isValidDatetime(args.flags.start)) {
+  const start = hasFlag(args, 'start') ? parseLocalDateTime(args.flags.start) : null;
+  const end = hasFlag(args, 'end') ? parseLocalDateTime(args.flags.end) : null;
+  if (start && !start.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --start datetime: ${args.flags.start}` },
       outputOptions(args)
@@ -895,12 +1074,49 @@ async function handleUpdate(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (args.flags.end && !isValidDatetime(args.flags.end)) {
+  if (end && !end.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --end datetime: ${args.flags.end}` },
       outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
+  }
+
+  const changingAllDayMode = args.flags['all-day'] || args.flags['no-all-day'];
+  if (changingAllDayMode && !!start !== !!end) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Changing all-day mode with dates requires both --start and --end' },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+  if (args.flags['all-day'] && ((start && start.kind !== 'date') || (end && end.kind !== 'date'))) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_DATETIME, message: '--all-day requires YYYY-MM-DD format for --start and --end' },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+  if (args.flags['no-all-day'] && ((start && start.kind === 'date') || (end && end.kind === 'date'))) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_DATETIME, message: '--no-all-day requires datetime boundaries' },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+  if (start && end) {
+    const effectiveEnd = new Date(end.date.getTime());
+    if (args.flags['all-day']) effectiveEnd.setDate(effectiveEnd.getDate() + 1);
+    const validRange = args.flags['all-day']
+      ? validateOrderedRange(start.date, effectiveEnd)
+      : validateUpdateRange(start, end);
+    if (!validRange) {
+      output.outputError(
+        { code: ERROR_CODES.INVALID_RANGE, message: 'Start must be before end' },
+        outputOptions(args)
+      );
+      process.exit(EXIT_VALIDATION_ERROR);
+    }
   }
 
   const scriptArgs = {
@@ -910,8 +1126,8 @@ async function handleUpdate(args) {
     eventId,
     // Preserve empty strings to allow clearing fields (e.g., --location "")
     summary: args.flags.summary !== undefined ? args.flags.summary : null,
-    start: args.flags.start || null,
-    end: args.flags.end || null,
+    start: hasFlag(args, 'start') ? args.flags.start : null,
+    end: hasFlag(args, 'end') ? args.flags.end : null,
     location: args.flags.location !== undefined ? args.flags.location : null,
     description: args.flags.description !== undefined ? args.flags.description : null,
     allDay: args.flags['all-day'] || false,
@@ -1071,7 +1287,7 @@ async function handleFreeBusy(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (!args.flags.from) {
+  if (!hasFlag(args, 'from')) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--from is required' },
       outputOptions(args)
@@ -1079,7 +1295,7 @@ async function handleFreeBusy(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (!args.flags.to) {
+  if (!hasFlag(args, 'to')) {
     output.outputError(
       { code: ERROR_CODES.MISSING_REQUIRED, message: '--to is required' },
       outputOptions(args)
@@ -1087,8 +1303,9 @@ async function handleFreeBusy(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  // Validate datetime formats
-  if (!isValidDatetime(args.flags.from)) {
+  const from = parseLocalDateTime(args.flags.from);
+  const to = parseLocalDateTime(args.flags.to);
+  if (!from.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --from datetime: ${args.flags.from}` },
       outputOptions(args)
@@ -1096,9 +1313,17 @@ async function handleFreeBusy(args) {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
-  if (!isValidDatetime(args.flags.to)) {
+  if (!to.ok) {
     output.outputError(
       { code: ERROR_CODES.INVALID_DATETIME, message: `Invalid --to datetime: ${args.flags.to}` },
+      outputOptions(args)
+    );
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+
+  if (!validateOrderedRange(from, to)) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_RANGE, message: '--from must be before --to' },
       outputOptions(args)
     );
     process.exit(EXIT_VALIDATION_ERROR);
@@ -1186,7 +1411,7 @@ async function handleConfig(args) {
         config.setDefaultCalendarId(selectedCalendar.id);
 
         if (args.flags.human) {
-          console.log(`Default calendar set to "${selectedCalendar.name}"`);
+          console.log(`Default calendar set to "${output.escapeTerminalText(selectedCalendar.name)}"`);
         } else {
           output.output({ defaultCalendar: { id: selectedCalendar.id, name: selectedCalendar.name } }, outputOptions(args));
         }
@@ -1219,7 +1444,9 @@ async function handleConfig(args) {
 
       console.log('Available calendars:');
       calendars.forEach((cal, i) => {
-        console.log(`  ${i + 1}. ${cal.name} (${cal.source}) - ID: ${cal.id.substring(0, 8)}...`);
+        console.log(
+          `  ${i + 1}. ${output.escapeTerminalText(cal.name)} (${output.escapeTerminalText(cal.source)}) - ID: ${output.escapeTerminalText(String(cal.id).substring(0, 8))}...`
+        );
       });
 
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -1239,7 +1466,7 @@ async function handleConfig(args) {
 
       const selectedCalendar = calendars[index];
       config.setDefaultCalendarId(selectedCalendar.id);
-      console.log(`Default calendar set to "${selectedCalendar.name}"`);
+      console.log(`Default calendar set to "${output.escapeTerminalText(selectedCalendar.name)}"`);
       process.exit(0);
     }
 
@@ -1270,9 +1497,9 @@ async function handleConfig(args) {
         }, outputOptions(args));
       } else {
         if (calendar) {
-          console.log(`Default calendar: ${calendar.name} (${defaultId})`);
+          console.log(`Default calendar: ${output.escapeTerminalText(calendar.name)} (${output.escapeTerminalText(defaultId)})`);
         } else {
-          console.log(`Default calendar ID: ${defaultId} (calendar no longer exists)`);
+          console.log(`Default calendar ID: ${output.escapeTerminalText(defaultId)} (calendar no longer exists)`);
         }
       }
       process.exit(0);
@@ -1338,6 +1565,23 @@ async function main() {
     process.exit(EXIT_VALIDATION_ERROR);
   }
 
+  if (!COMMAND_CONTRACTS[args.command]) {
+    output.outputError(
+      { code: ERROR_CODES.INVALID_ARGUMENT, message: `Unknown command: ${args.command}` },
+      outputOptions(args)
+    );
+    if (args.flags.human) {
+      showHelp(null, { stderr: true });
+    }
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+
+  const contractError = validateCommandContract(args);
+  if (contractError) {
+    output.outputError(contractError, outputOptions(args));
+    process.exit(EXIT_VALIDATION_ERROR);
+  }
+
   // Route to command handler
   switch (args.command) {
     case 'setup':
@@ -1368,13 +1612,7 @@ async function main() {
       await handleConfig(args);
       break;
     default:
-      output.outputError(
-        { code: ERROR_CODES.INVALID_ARGUMENT, message: `Unknown command: ${args.command}` },
-        outputOptions(args)
-      );
-      if (args.flags.human) {
-        showHelp(null, { stderr: true });
-      }
+      // Command validity was checked above this switch.
       process.exit(EXIT_VALIDATION_ERROR);
   }
 }

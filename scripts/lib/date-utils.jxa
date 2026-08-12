@@ -1,0 +1,164 @@
+// Pure ES5 date helpers shared by accli JXA commands.
+// This IIFE intentionally depends only on standard JavaScript Date APIs so the
+// exact source can be exercised in Node's vm as well as JavaScriptCore.
+(function(global) {
+  'use strict';
+
+  function pad(value) {
+    return value < 10 ? '0' + value : String(value);
+  }
+
+  // Format a local timed value as YYYY-MM-DDTHH:mm:ss.
+  function formatLocalDate(date) {
+    return date.getFullYear() + '-' +
+      pad(date.getMonth() + 1) + '-' +
+      pad(date.getDate()) + 'T' +
+      pad(date.getHours()) + ':' +
+      pad(date.getMinutes()) + ':' +
+      pad(date.getSeconds());
+  }
+
+  // Format a local date as YYYY-MM-DD.
+  function formatDateOnly(date) {
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+  }
+
+  // Parse the supported local date grammar without accepting Date normalization.
+  function parseDateTime(value) {
+    if (typeof value !== 'string') return null;
+    var match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(value);
+    if (!match) return null;
+
+    var year = Number(match[1]);
+    var month = Number(match[2]);
+    var day = Number(match[3]);
+    var hasTime = match[4] !== undefined;
+    var hour = hasTime ? Number(match[4]) : 0;
+    var minute = hasTime ? Number(match[5]) : 0;
+    var second = hasTime && match[6] !== undefined ? Number(match[6]) : 0;
+    var date = new Date(year, month - 1, day, hour, minute, second, 0);
+
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day ||
+      date.getHours() !== hour || date.getMinutes() !== minute || date.getSeconds() !== second) {
+      return null;
+    }
+    return date;
+  }
+
+  function isDateOnly(value) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !!parseDateTime(value);
+  }
+
+  function isNonNegativeInteger(value) {
+    return typeof value === 'string' && /^\d+$/.test(value);
+  }
+
+  // Return local midnight for the supplied date.
+  function startOfDay(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
+  }
+
+  // Parse an all-day inclusive endpoint. EventKit stores end dates exclusively.
+  function parseAllDayDate(value, isEnd) {
+    var parsed = parseDateTime(value);
+    if (!parsed) return null;
+    var date = startOfDay(parsed);
+    if (isEnd) date.setDate(date.getDate() + 1);
+    return date;
+  }
+
+  function invalidDateTime() {
+    return { code: 'INVALID_DATETIME', message: 'Invalid event date or time' };
+  }
+
+  function invalidRange(allDay) {
+    return {
+      code: 'INVALID_RANGE',
+      message: allDay ? 'Start date must not be after end date' : 'Start must be before end'
+    };
+  }
+
+  // Validate create boundaries without relying on EventKit. The returned dates
+  // are ready for EventKit's exclusive all-day end representation.
+  function validateCreateDates(startValue, endValue, allDay) {
+    var start = allDay ? parseAllDayDate(startValue, false) : parseDateTime(startValue);
+    var end = allDay ? parseAllDayDate(endValue, true) : parseDateTime(endValue);
+
+    if (!start || !end || (allDay && (!isDateOnly(startValue) || !isDateOnly(endValue)))) {
+      return { error: invalidDateTime() };
+    }
+    if (start >= end) return { error: invalidRange(allDay) };
+    return { start: start, end: end };
+  }
+
+  // Validate update boundary syntax before accessing EventKit. With no explicit
+  // mode, two date-only values may target an existing all-day event, so equality
+  // remains valid until the target mode is known. Every other known timed range
+  // must be strictly ordered.
+  function validateUpdateDates(startValue, endValue, allDay, noAllDay) {
+    var hasStart = startValue !== null && startValue !== undefined;
+    var hasEnd = endValue !== null && endValue !== undefined;
+    var start = hasStart ? parseDateTime(startValue) : null;
+    var end = hasEnd ? parseDateTime(endValue) : null;
+
+    if ((hasStart && !start) || (hasEnd && !end)) return { error: invalidDateTime() };
+    if (allDay && ((hasStart && !isDateOnly(startValue)) || (hasEnd && !isDateOnly(endValue)))) {
+      return { error: { code: 'INVALID_DATETIME', message: '--all-day requires date-only boundaries' } };
+    }
+    if ((allDay || noAllDay) && hasStart !== hasEnd) {
+      return { error: { code: 'INVALID_ARGUMENT', message: 'Changing all-day mode with dates requires both boundaries' } };
+    }
+    if (!hasStart || !hasEnd) return { start: start, end: end };
+
+    if (noAllDay && (!startValue || isDateOnly(startValue) || !endValue || isDateOnly(endValue))) {
+      return { error: { code: 'INVALID_DATETIME', message: 'Timed events require datetime boundaries' } };
+    }
+
+    if (allDay) {
+      var allDayStart = parseAllDayDate(startValue, false);
+      var allDayEnd = parseAllDayDate(endValue, true);
+      if (allDayStart >= allDayEnd) return { error: invalidRange(true) };
+      return { start: start, end: end };
+    }
+
+    // Date-only pairs can validly update an all-day event. Do reject an
+    // inverted pair now, because neither possible target mode can accept it.
+    var bothDateOnly = isDateOnly(startValue) && isDateOnly(endValue);
+    if ((bothDateOnly && start > end) || (!bothDateOnly && start >= end)) {
+      return { error: invalidRange(false) };
+    }
+    return { start: start, end: end };
+  }
+
+  // Validate a resolved update range after the target event's mode is known.
+  function validateUpdateTargetRange(start, end, allDay) {
+    if (start < end) return { ok: true };
+    return {
+      error: {
+        code: 'INVALID_RANGE',
+        message: allDay ? 'Start date must be on or before end date' : 'Start must be before end'
+      }
+    };
+  }
+
+  // Convert EventKit's exclusive all-day end to a display date, clamped to start.
+  function displayEndDateForAllDay(startDate, endDate) {
+    var adjusted = new Date(endDate.getTime());
+    adjusted.setDate(adjusted.getDate() - 1);
+    return formatDateOnly(adjusted) < formatDateOnly(startDate) ? startDate : adjusted;
+  }
+
+  global.AccliDateUtils = {
+    formatLocalDate: formatLocalDate,
+    formatDateOnly: formatDateOnly,
+    parseDateTime: parseDateTime,
+    isDateOnly: isDateOnly,
+    isNonNegativeInteger: isNonNegativeInteger,
+    startOfDay: startOfDay,
+    parseAllDayDate: parseAllDayDate,
+    validateCreateDates: validateCreateDates,
+    validateUpdateDates: validateUpdateDates,
+    validateUpdateTargetRange: validateUpdateTargetRange,
+    displayEndDateForAllDay: displayEndDateForAllDay
+  };
+})(this);

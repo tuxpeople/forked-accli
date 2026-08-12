@@ -78,31 +78,8 @@
     };
   }
 
-  function formatLocalDate(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    var hours = String(date.getHours()).padStart(2, '0');
-    var minutes = String(date.getMinutes()).padStart(2, '0');
-    var seconds = String(date.getSeconds()).padStart(2, '0');
-    return year + '-' + month + '-' + day + 'T' + hours + ':' + minutes + ':' + seconds;
-  }
-
-  function formatDateOnly(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    return year + '-' + month + '-' + day;
-  }
-
   function formatISO(date) {
     return date.toISOString();
-  }
-
-  function displayEndDateForAllDay(startDate, endDate) {
-    var adjusted = new Date(endDate.getTime());
-    adjusted.setDate(adjusted.getDate() - 1);
-    return formatDateOnly(adjusted) < formatDateOnly(startDate) ? startDate : adjusted;
   }
 
   function listCalendars(store) {
@@ -148,8 +125,8 @@
     }
 
     if (index !== null && index !== undefined) {
-      var idx = parseInt(index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= calendars.length) {
+      var idx = Number(index);
+      if (!AccliDateUtils.isNonNegativeInteger(index) || idx < 0 || idx >= calendars.length) {
         return {
           calendar: null,
           error: { code: 'CALENDAR_NOT_FOUND', message: 'Calendar with index \"' + index + '\" not found' }
@@ -187,6 +164,10 @@
     }
 
     return { calendar: matches[0], error: null };
+  }
+
+  if (args.calendarIndex !== null && args.calendarIndex !== undefined && !AccliDateUtils.isNonNegativeInteger(String(args.calendarIndex))) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Invalid calendar index' } });
   }
 
   var store = $.EKEventStore.alloc.init;
@@ -229,7 +210,7 @@
     var allDay = !!unwrap(event.allDay);
     var displayEndDate = endDate;
     if (allDay) {
-      displayEndDate = displayEndDateForAllDay(startDate, endDate);
+      displayEndDate = AccliDateUtils.displayEndDateForAllDay(startDate, endDate);
     }
 
     var isRecurring = false;
@@ -249,8 +230,8 @@
         location: unwrap(event.location) || '',
         description: unwrap(event.notes) || '',
         allDay: allDay,
-        start: allDay ? formatDateOnly(startDate) : formatLocalDate(startDate),
-        end: allDay ? formatDateOnly(displayEndDate) : formatLocalDate(displayEndDate),
+        start: allDay ? AccliDateUtils.formatDateOnly(startDate) : AccliDateUtils.formatLocalDate(startDate),
+        end: allDay ? AccliDateUtils.formatDateOnly(displayEndDate) : AccliDateUtils.formatLocalDate(displayEndDate),
         startISO: formatISO(startDate),
         endISO: formatISO(displayEndDate),
         isRecurring: isRecurring

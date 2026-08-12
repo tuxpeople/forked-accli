@@ -82,39 +82,8 @@
     };
   }
 
-  function formatLocalDate(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    var hours = String(date.getHours()).padStart(2, '0');
-    var minutes = String(date.getMinutes()).padStart(2, '0');
-    var seconds = String(date.getSeconds()).padStart(2, '0');
-    return year + '-' + month + '-' + day + 'T' + hours + ':' + minutes + ':' + seconds;
-  }
-
-  function formatDateOnly(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    return year + '-' + month + '-' + day;
-  }
-
   function formatISO(date) {
     return date.toISOString();
-  }
-
-  function displayEndDateForAllDay(startDate, endDate) {
-    var adjusted = new Date(endDate.getTime());
-    adjusted.setDate(adjusted.getDate() - 1);
-    return formatDateOnly(adjusted) < formatDateOnly(startDate) ? startDate : adjusted;
-  }
-
-  function parseDateTime(str) {
-    if (!str) return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-      return new Date(str + 'T00:00:00');
-    }
-    return new Date(str);
   }
 
   function listCalendars(store) {
@@ -161,8 +130,8 @@
     }
 
     if (index !== null && index !== undefined) {
-      var idx = parseInt(index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= calendars.length) {
+      var idx = Number(index);
+      if (!AccliDateUtils.isNonNegativeInteger(index) || idx < 0 || idx >= calendars.length) {
         return {
           calendar: null,
           error: { code: 'CALENDAR_NOT_FOUND', message: 'Calendar with index \"' + index + '\" not found' }
@@ -202,6 +171,28 @@
     return { calendar: matches[0], error: null };
   }
 
+  var hasFrom = args.from !== null && args.from !== undefined;
+  var hasTo = args.to !== null && args.to !== undefined;
+  var fromDate = hasFrom ? AccliDateUtils.parseDateTime(args.from) : new Date();
+  var toDate = hasTo ? AccliDateUtils.parseDateTime(args.to) : null;
+  if (!fromDate || (hasTo && !toDate)) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_DATETIME', message: 'Invalid range date or time' } });
+  }
+  if (!toDate) {
+    toDate = new Date(fromDate);
+    toDate.setDate(toDate.getDate() + 7);
+  }
+  if (fromDate >= toDate) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_RANGE', message: 'Start must be before end' } });
+  }
+  if (args.max !== null && args.max !== undefined && (typeof args.max !== 'number' || Math.floor(args.max) !== args.max || args.max < 0 || args.max > 10000)) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'max must be an integer from 0 to 10000' } });
+  }
+
+  if (args.calendarIndex !== null && args.calendarIndex !== undefined && !AccliDateUtils.isNonNegativeInteger(String(args.calendarIndex))) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Invalid calendar index' } });
+  }
+
   var store = $.EKEventStore.alloc.init;
   var access = ensureCalendarAccess(store);
   if (!access.ok) {
@@ -216,16 +207,7 @@
   var calendarInfo = calResult.calendar;
   var calendar = calendarInfo.cal;
 
-  var fromDate = args.from ? parseDateTime(args.from) : new Date();
-  var toDate;
-  if (args.to) {
-    toDate = parseDateTime(args.to);
-  } else {
-    toDate = new Date(fromDate);
-    toDate.setDate(toDate.getDate() + 7);
-  }
-
-  var maxEvents = args.max || 50;
+  var maxEvents = args.max === null || args.max === undefined ? 50 : args.max;
   var predicate = store.predicateForEventsWithStartDateEndDateCalendars(
     toNSDate(fromDate),
     toNSDate(toDate),
@@ -259,7 +241,7 @@
       var allDay = !!unwrap(event.allDay);
       var displayEndDate = endDate;
       if (allDay) {
-        displayEndDate = displayEndDateForAllDay(startDate, endDate);
+        displayEndDate = AccliDateUtils.displayEndDateForAllDay(startDate, endDate);
       }
 
       var isRecurring = false;
@@ -278,8 +260,8 @@
         location: location,
         description: description,
         allDay: allDay,
-        start: allDay ? formatDateOnly(startDate) : formatLocalDate(startDate),
-        end: allDay ? formatDateOnly(displayEndDate) : formatLocalDate(displayEndDate),
+        start: allDay ? AccliDateUtils.formatDateOnly(startDate) : AccliDateUtils.formatLocalDate(startDate),
+        end: allDay ? AccliDateUtils.formatDateOnly(displayEndDate) : AccliDateUtils.formatLocalDate(displayEndDate),
         startISO: formatISO(startDate),
         endISO: formatISO(displayEndDate),
         isRecurring: isRecurring

@@ -82,26 +82,8 @@
     };
   }
 
-  function formatLocalDate(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    var hours = String(date.getHours()).padStart(2, '0');
-    var minutes = String(date.getMinutes()).padStart(2, '0');
-    var seconds = String(date.getSeconds()).padStart(2, '0');
-    return year + '-' + month + '-' + day + 'T' + hours + ':' + minutes + ':' + seconds;
-  }
-
   function formatISO(date) {
     return date.toISOString();
-  }
-
-  function parseDateTime(str) {
-    if (!str) return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-      return new Date(str + 'T00:00:00');
-    }
-    return new Date(str);
   }
 
   function listCalendars(store) {
@@ -129,6 +111,22 @@
     }
 
     return items;
+  }
+
+  var fromDate = AccliDateUtils.parseDateTime(args.from);
+  var toDate = AccliDateUtils.parseDateTime(args.to);
+  if (!fromDate || !toDate) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_DATETIME', message: 'Invalid range date or time' } });
+  }
+  if (fromDate >= toDate) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_RANGE', message: 'Start must be before end' } });
+  }
+  if (args.calendarIndexes) {
+    for (var validateIndex = 0; validateIndex < args.calendarIndexes.length; validateIndex++) {
+      if (!AccliDateUtils.isNonNegativeInteger(String(args.calendarIndexes[validateIndex]))) {
+        return JSON.stringify({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Invalid calendar index' } });
+      }
+    }
   }
 
   var store = $.EKEventStore.alloc.init;
@@ -202,9 +200,6 @@
     }
   }
 
-  var fromDate = parseDateTime(args.from);
-  var toDate = parseDateTime(args.to);
-
   var busySlots = [];
 
   if (targetCalendars.length > 0) {
@@ -257,8 +252,8 @@
           calendar: calName,
           calendarId: calId,
           summary: summary,
-          start: formatLocalDate(startDate),
-          end: formatLocalDate(endDate),
+          start: AccliDateUtils.formatLocalDate(startDate),
+          end: AccliDateUtils.formatLocalDate(endDate),
           startISO: formatISO(startDate),
           endISO: formatISO(endDate)
         });

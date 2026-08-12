@@ -82,30 +82,6 @@
     };
   }
 
-  function formatLocalDate(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    var hours = String(date.getHours()).padStart(2, '0');
-    var minutes = String(date.getMinutes()).padStart(2, '0');
-    var seconds = String(date.getSeconds()).padStart(2, '0');
-    return year + '-' + month + '-' + day + 'T' + hours + ':' + minutes + ':' + seconds;
-  }
-
-  function parseDateTime(str, allDay, isEnd) {
-    if (!str) return null;
-
-    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-      var d = new Date(str + 'T00:00:00');
-      if (allDay && isEnd) {
-        d.setDate(d.getDate() + 1);
-      }
-      return d;
-    }
-
-    return new Date(str);
-  }
-
   function listCalendars(store) {
     var calendars = store.calendarsForEntityType($.EKEntityTypeEvent);
     var items = [];
@@ -149,8 +125,8 @@
     }
 
     if (index !== null && index !== undefined) {
-      var idx = parseInt(index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= calendars.length) {
+      var idx = Number(index);
+      if (!AccliDateUtils.isNonNegativeInteger(index) || idx < 0 || idx >= calendars.length) {
         return {
           calendar: null,
           error: { code: 'CALENDAR_NOT_FOUND', message: 'Calendar with index \"' + index + '\" not found' }
@@ -190,6 +166,19 @@
     return { calendar: matches[0], error: null };
   }
 
+  // Validate all supplied dates and their range before authorization or
+  // calendar access so malformed direct JXA calls are deterministic.
+  var dateValidation = AccliDateUtils.validateCreateDates(args.start, args.end, !!args.allDay);
+  if (dateValidation.error) {
+    return JSON.stringify({ ok: false, error: dateValidation.error });
+  }
+  var startDate = dateValidation.start;
+  var endDate = dateValidation.end;
+
+  if (args.calendarIndex !== null && args.calendarIndex !== undefined && !AccliDateUtils.isNonNegativeInteger(String(args.calendarIndex))) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Invalid calendar index' } });
+  }
+
   var store = $.EKEventStore.alloc.init;
   var access = ensureCalendarAccess(store);
   if (!access.ok) {
@@ -203,25 +192,6 @@
 
   var calendarInfo = calResult.calendar;
   var calendar = calendarInfo.cal;
-
-  var startDate = parseDateTime(args.start, !!args.allDay, false);
-  var endDate = parseDateTime(args.end, !!args.allDay, true);
-
-  if (args.allDay) {
-    if (startDate >= endDate) {
-      return JSON.stringify({
-        ok: false,
-        error: { code: 'INVALID_RANGE', message: 'Start date must not be after end date' }
-      });
-    }
-  } else {
-    if (startDate >= endDate) {
-      return JSON.stringify({
-        ok: false,
-        error: { code: 'INVALID_RANGE', message: 'Start must be before end' }
-      });
-    }
-  }
 
   try {
     var event = $.EKEvent.eventWithEventStore(store);
@@ -252,7 +222,7 @@
 
     var createdStart = unwrap(event.startDate);
     var createdEnd = unwrap(event.endDate);
-    var displayEnd = args.allDay ? args.end : formatLocalDate(createdEnd);
+    var displayEnd = args.allDay ? args.end : AccliDateUtils.formatLocalDate(createdEnd);
 
     var result = {
       ok: true,
@@ -263,7 +233,7 @@
         calendarId: calendarInfo.id,
         summary: args.summary,
         allDay: !!args.allDay,
-        start: args.allDay ? args.start : formatLocalDate(createdStart),
+        start: args.allDay ? args.start : AccliDateUtils.formatLocalDate(createdStart),
         end: displayEnd
       }
     };

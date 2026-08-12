@@ -45,7 +45,7 @@ backward-compatible no-op.
 
 Use `--human` for the original human-readable output. Human errors are written
 to stderr, and interactive setup and `config set-default` selection are only
-enabled with this flag. When both `--human` and `--json` are supplied,
+enabled with this flag. When `--human` is combined with `--compact` or `--json`,
 `--human` wins. `--help` and `--version` always use plain text.
 
 ## Date ranges

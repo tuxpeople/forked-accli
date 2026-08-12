@@ -125,8 +125,8 @@
     }
 
     if (index !== null && index !== undefined) {
-      var idx = parseInt(index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= calendars.length) {
+      var idx = Number(index);
+      if (!AccliDateUtils.isNonNegativeInteger(index) || idx < 0 || idx >= calendars.length) {
         return {
           calendar: null,
           error: { code: 'CALENDAR_NOT_FOUND', message: 'Calendar with index \"' + index + '\" not found' }
@@ -211,6 +211,10 @@
     }
 
     return null;
+  }
+
+  if (args.calendarIndex !== null && args.calendarIndex !== undefined && !AccliDateUtils.isNonNegativeInteger(String(args.calendarIndex))) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Invalid calendar index' } });
   }
 
   var store = $.EKEventStore.alloc.init;

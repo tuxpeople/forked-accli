@@ -6,21 +6,30 @@ const { EventEmitter } = require('events');
 const realSpawn = childProcess.spawn;
 
 function respondForWrappedScript(wrappedScript) {
-  if (wrappedScript.includes('calendars.jxa')) {
+  if (process.env.ACCLI_MOCK_OSASCRIPT_RESPONSE) {
+    return JSON.parse(process.env.ACCLI_MOCK_OSASCRIPT_RESPONSE);
+  }
+  const match = /^var __accliScriptName = ("(?:[^"\\]|\\.)*");$/m.exec(wrappedScript);
+  const scriptName = match ? JSON.parse(match[1]) : null;
+
+  if (scriptName === 'calendars') {
     return { ok: true, calendars: [{ name: 'Work', source: 'iCloud', id: 'CAL1', index: 0, writable: true }] };
   }
-  if (wrappedScript.includes('setup.jxa')) {
+  if (scriptName === 'setup') {
     return { ok: true, message: 'ok', calendars: ['Work'] };
   }
-  if (wrappedScript.includes('events.jxa')) {
+  if (scriptName === 'events') {
     return { ok: true, count: 0, truncated: false, events: [] };
   }
-  if (wrappedScript.includes('event.jxa')) {
+  if (scriptName === 'event') {
     return { ok: false, error: { code: 'EVENT_NOT_FOUND', message: 'missing' } };
   }
-  if (wrappedScript.includes('freebusy.jxa')) {
+  if (scriptName === 'freebusy') {
     return { ok: true, busy: [] };
   }
+  if (scriptName === 'create') return { ok: true, event: { id: 'event-created', calendar: 'Work' } };
+  if (scriptName === 'update') return { ok: true, event: { id: 'event-updated', calendar: 'Work' } };
+  if (scriptName === 'delete') return { ok: true, deleted: { id: 'event-deleted', calendar: 'Work' } };
   return { ok: true };
 }
 
@@ -41,4 +50,3 @@ childProcess.spawn = function patchedSpawn(command, args, options) {
 
   return proc;
 };
-

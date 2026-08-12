@@ -48,6 +48,11 @@ describe('accli CLI integration', () => {
     expect(human.stdout).toBe('');
     expect(human.stderr).toMatch(/Error \[INVALID_ARGUMENT\]: Unknown command/);
     expect(human.stderr).toMatch(/USAGE:/);
+
+    const compact = runCli(['nope', '--compact']);
+    expect(compact.status).toBe(2);
+    expect(compact.stdout.trim()).not.toContain('\n');
+    expect(JSON.parse(compact.stdout).error.code).toBe('INVALID_ARGUMENT');
   });
 
   test('--help remains plain text', () => {
@@ -55,6 +60,11 @@ describe('accli CLI integration', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/USAGE:/);
     expect(() => JSON.parse(r.stdout)).toThrow();
+
+    const compact = runCli(['--help', '--compact', '--human']);
+    expect(compact.status).toBe(0);
+    expect(compact.stdout).toMatch(/USAGE:/);
+    expect(() => JSON.parse(compact.stdout)).toThrow();
 
     for (const command of ['setup', 'calendars']) {
       const commandHelp = runCli([command, '--help']);
@@ -80,6 +90,11 @@ describe('accli CLI integration', () => {
       expect(human.status).toBe(1);
       expect(human.stdout).toBe('');
       expect(human.stderr).toMatch(/Error \[INTERNAL_ERROR\]: Failed to read config/);
+
+      const compact = runCli(['events', '--compact'], { env: { ACCLI_CONFIG_PATH: configPath } });
+      expect(compact.status).toBe(1);
+      expect(compact.stdout.trim()).not.toContain('\n');
+      expect(JSON.parse(compact.stdout).error.code).toBe('INTERNAL_ERROR');
     } finally {
       tmp.cleanup();
     }
@@ -182,6 +197,71 @@ describe('accli CLI integration', () => {
       tmp.cleanup();
     }
   });
+
+  test('authorization errors retain exit 10 and selected output channel', () => {
+    const payload = JSON.stringify({ ok: false, error: { code: 'NOT_AUTHORIZED', message: 'calendar denied' } });
+    const json = runCli(['calendars'], { env: { ACCLI_MOCK_OSASCRIPT_RESPONSE: payload } });
+    expect(json.status).toBe(10);
+    expect(json.stderr).toBe('');
+    expect(JSON.parse(json.stdout).error.code).toBe('NOT_AUTHORIZED');
+
+    const human = runCli(['calendars', '--human'], { env: { ACCLI_MOCK_OSASCRIPT_RESPONSE: payload } });
+    expect(human.status).toBe(10);
+    expect(human.stdout).toBe('');
+    expect(human.stderr).toMatch(/Error \[NOT_AUTHORIZED\]: calendar denied/);
+  });
+
+  test('config operations honor default, compact, and human output modes', () => {
+    const tmp = makeTempHome();
+    try {
+      const env = { ACCLI_CONFIG_PATH: path.join(tmp.dir, '.acclirc') };
+      const set = runCli(['config', 'set-default', '--calendar-id', 'CAL1'], { env });
+      expect(set.status).toBe(0);
+      expect(JSON.parse(set.stdout).defaultCalendar.id).toBe('CAL1');
+
+      const show = runCli(['config', 'show', '--compact'], { env });
+      expect(show.status).toBe(0);
+      expect(show.stdout.trim()).not.toContain('\n');
+      expect(JSON.parse(show.stdout).defaultCalendar.id).toBe('CAL1');
+
+      const clear = runCli(['config', 'clear', '--human', '--compact', '--json'], { env });
+      expect(clear.status).toBe(0);
+      expect(clear.stdout).toBe('Default calendar cleared\n');
+      expect(clear.stderr).toBe('');
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  test('config human output escapes calendar text while JSON remains raw', () => {
+    const tmp = makeTempHome();
+    const id = 'ID\x1b[31m';
+    const name = 'Work\x1b]8;;https://example.test\x07\nnext';
+    const source = 'iCloud\r\t';
+    const payload = JSON.stringify({ ok: true, calendars: [{ id, name, source, index: 0 }] });
+    const env = {
+      ACCLI_CONFIG_PATH: path.join(tmp.dir, '.acclirc'),
+      ACCLI_MOCK_OSASCRIPT_RESPONSE: payload,
+    };
+
+    try {
+      const set = runCli(['config', 'set-default', '--calendar-id', id, '--human'], { env });
+      expect(set.status).toBe(0);
+      expect(set.stdout).toContain('\\x1b');
+      expect(set.stdout).not.toContain('\x1b');
+
+      const human = runCli(['config', 'show', '--human'], { env });
+      expect(human.status).toBe(0);
+      expect(human.stdout).toContain('\\x1b');
+      expect(human.stdout).not.toContain('\x1b');
+
+      const json = runCli(['config', 'show'], { env });
+      expect(json.status).toBe(0);
+      expect(JSON.parse(json.stdout).defaultCalendar).toEqual({ id, name });
+    } finally {
+      tmp.cleanup();
+    }
+  });
 });
 
 describe('positional parsing for event/update/delete (regression tests)', () => {
@@ -248,10 +328,145 @@ describe('positional parsing for event/update/delete (regression tests)', () => 
       const data = JSON.parse(r.stdout);
       expect(data.ok).toBe(false);
       expect(data.error.code).toBe('INVALID_ARGUMENT');
-      expect(data.error.message).toMatch(/Too many positional arguments/);
+      expect(data.error.message).toMatch(/calendar/i);
     } finally {
       tmp.cleanup();
     }
+  });
+});
+
+describe('CLI command contracts', () => {
+  function expectInvalid(args, message) {
+    const result = runCli(args);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe('');
+    const data = JSON.parse(result.stdout);
+    expect(data.ok).toBe(false);
+    expect(data.error.code).toBe('INVALID_ARGUMENT');
+    if (message) expect(data.error.message).toMatch(message);
+  }
+
+  test.each([
+    [['events', '--maxx', '10'], /Unknown flag: --maxx/],
+    [['delete', 'Work', 'event-123', 'surplus'], /positional/],
+    [['update', 'Work', 'event-123', 'surplus'], /positional/],
+    [['create', 'Work', '--calendar-id', 'CAL1', '--summary', 'Meeting', '--start', '2025-01-15T14:00', '--end', '2025-01-15T15:00'], /calendar/i],
+    [['events', 'Work', '--calendar-id', 'CAL1'], /calendar/i],
+    [['events', '--calendar-name', 'Work', '--calendar-index', '0'], /calendar/i],
+    [['update', 'Work', 'event-123', '--all-day', '--no-all-day'], /either --all-day or --no-all-day/],
+    [['events', '--calendar-id', 'CAL1', '--calendar-id', 'CAL2'], /Only one --calendar-id/],
+    [['config', 'set-default', '--calendar-id', 'CAL1', '--calendar-id', 'CAL2'], /Only one --calendar or --calendar-id/],
+    [['events', '--calendar-name', 'Work', '--calendar-name', 'Personal'], /only be specified once: --calendar-name/],
+    [['events', 'Work', '--from', '2025-01-01', '--from', '2025-01-02'], /only be specified once: --from/],
+    [['create', 'Work', '--summary', 'One', '--summary', 'Two'], /only be specified once: --summary/],
+    [['events', '--typo'], /Unknown flag: --typo/],
+  ])('rejects invalid input %#', (args, message) => {
+    expectInvalid(args, message);
+  });
+
+  test('misspelled create calendar selector is rejected before default-calendar dispatch', () => {
+    const tmp = makeTempHome();
+    try {
+      fs.writeFileSync(path.join(tmp.dir, '.acclirc'), JSON.stringify({ defaultCalendarId: 'CAL1' }));
+      const result = runCli([
+        'create', '--calender-id', 'CAL1', '--summary', 'Meeting', '--start', '2025-01-15T14:00', '--end', '2025-01-15T15:00',
+      ], { env: { ACCLI_CONFIG_PATH: path.join(tmp.dir, '.acclirc') } });
+      expect(result.status).toBe(2);
+      expect(JSON.parse(result.stdout).error).toMatchObject({ code: 'INVALID_ARGUMENT', message: expect.stringMatching(/--calender-id/) });
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  test('freebusy accepts repeated calendar selectors', () => {
+    const result = runCli([
+      'freebusy', '--calendar', 'Work', '--calendar', 'Personal', '--calendar-id', 'CAL1', '--calendar-id', 'CAL2',
+      '--calendar-index', '0', '--calendar-index', '1', '--from', '2025-01-15', '--to', '2025-01-16',
+    ]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).busy).toEqual([]);
+  });
+
+  test('valid event forms still accept positional calendars and configured defaults', () => {
+    const tmp = makeTempHome();
+    try {
+      const configPath = path.join(tmp.dir, '.acclirc');
+      fs.writeFileSync(configPath, JSON.stringify({ defaultCalendarId: 'CAL1' }));
+      for (const args of [
+        ['event', 'Work', 'event-123'],
+        ['event', 'event-123', '--calendar-id', 'CAL1'],
+        ['event', 'event-123'],
+      ]) {
+        const result = runCli(args, { env: { ACCLI_CONFIG_PATH: configPath } });
+        expect(result.status).toBe(1);
+        expect(JSON.parse(result.stdout).error.code).toBe('EVENT_NOT_FOUND');
+      }
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  test('human contract errors use stderr', () => {
+    const result = runCli(['events', '--unknown', 'value', '--human']);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/Error \[INVALID_ARGUMENT\]: Unknown flag/);
+  });
+});
+
+describe('strict calendar input validation', () => {
+  function expectValidation(args, code) {
+    const result = runCli(args);
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stdout).error.code).toBe(code);
+  }
+
+  test.each([
+    ['2025-02-30'], ['2025-04-31'], ['2025-01-01T24:00'], ['2025-01-01T12:60'],
+  ])('rejects malformed event dates before dispatch: %s', (value) => {
+    expectValidation(['events', 'Work', '--from', value], 'INVALID_DATETIME');
+  });
+
+  test.each([
+    [['events', 'Work', '--calendar-index', '1x'], 'INVALID_ARGUMENT'],
+    [['events', 'Work', '--max', '-1'], 'INVALID_ARGUMENT'],
+    [['events', 'Work', '--max', '1.5'], 'INVALID_ARGUMENT'],
+    [['events', 'Work', '--max', '10001'], 'INVALID_ARGUMENT'],
+    [['events', 'Work', '--from', '2025-01-16', '--to', '2025-01-15'], 'INVALID_RANGE'],
+    [['events', 'Work', '--from', '2025-01-15', '--to', '2025-01-15'], 'INVALID_RANGE'],
+    [['freebusy', '--calendar', 'Work', '--from', '2025-01-15', '--to', '2025-01-15'], 'INVALID_RANGE'],
+    [['create', 'Work', '--summary', 'Meeting', '--start', '2025-01-15T15:00', '--end', '2025-01-15T14:00'], 'INVALID_RANGE'],
+    [['update', 'Work', 'event-123', '--start', '2025-01-15T15:00', '--end', '2025-01-15T14:00'], 'INVALID_RANGE'],
+    [['update', 'Work', 'event-123', '--start', '2025-01-15T14:00', '--end', '2025-01-15T14:00'], 'INVALID_RANGE'],
+    [['update', 'Work', 'event-123', '--all-day', '--start', '2025-01-15'], 'INVALID_ARGUMENT'],
+    [['update', 'Work', 'event-123', '--all-day', '--start', '2025-01-15T09:00', '--end', '2025-01-16T09:00'], 'INVALID_DATETIME'],
+    [['update', 'Work', 'event-123', '--no-all-day', '--start', '2025-01-15', '--end', '2025-01-15'], 'INVALID_DATETIME'],
+    [['events', 'Work', '--from', ''], 'INVALID_DATETIME'],
+    [['freebusy', '--calendar', 'Work', '--from', '', '--to', '2025-01-16'], 'INVALID_DATETIME'],
+    [['create', 'Work', '--summary', 'Meeting', '--start', '', '--end', '2025-01-16T10:00'], 'INVALID_DATETIME'],
+    [['update', 'Work', 'event-123', '--start', '', '--end', '2025-01-16T10:00'], 'INVALID_DATETIME'],
+  ])('rejects invalid boundary input %#', (args, code) => {
+    expectValidation(args, code);
+  });
+
+  test('preserves max zero and permits same-day all-day creation', () => {
+    const listed = runCli(['events', 'Work', '--max', '0']);
+    expect(listed.status).toBe(0);
+    expect(JSON.parse(listed.stdout).count).toBe(0);
+
+    const created = runCli([
+      'create', 'Work', '--summary', 'Holiday', '--start', '2025-01-15', '--end', '2025-01-15', '--all-day',
+    ]);
+    expect(created.status).toBe(0);
+    expect(JSON.parse(created.stdout).event.id).toBe('event-created');
+  });
+
+  test('permits same-day date-only updates until the existing all-day mode is resolved', () => {
+    const updated = runCli([
+      'update', 'Work', 'event-123', '--start', '2025-01-15', '--end', '2025-01-15',
+    ]);
+    expect(updated.status).toBe(0);
+    expect(JSON.parse(updated.stdout).event.id).toBe('event-updated');
   });
 });
 

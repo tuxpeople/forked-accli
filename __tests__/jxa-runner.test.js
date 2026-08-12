@@ -1,6 +1,8 @@
 'use strict';
 
 const { EventEmitter } = require('events');
+const fs = require('fs');
+const path = require('path');
 
 function makeFakeProcess({ stdout = '', stderr = '', closeCode = 0, emitError = null }) {
   const proc = new EventEmitter();
@@ -36,13 +38,17 @@ describe('lib/jxa-runner', () => {
     expect(result.error.message).toMatch(/Script not found/);
   });
 
-  test('wraps args into script and parses JSON stdout', async () => {
+  test('wraps a stable script marker, args, and shared date helpers before command source', async () => {
     const spawnMock = jest.fn((cmd, args) => {
       expect(cmd).toBe('osascript');
       expect(args[0]).toBe('-l');
       expect(args[1]).toBe('JavaScript');
       expect(args[2]).toBe('-e');
-      expect(String(args[3])).toMatch(/^var __args = {"foo":"bar"};\n/);
+      const wrappedScript = String(args[3]);
+      expect(wrappedScript).toMatch(/^var __accliScriptName = "calendars";\nvar __args = {"foo":"bar"};\n/);
+      expect(wrappedScript.indexOf('global.AccliDateUtils')).toBeGreaterThan(wrappedScript.indexOf('var __args'));
+      const commandSource = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'calendars.jxa'), 'utf8');
+      expect(wrappedScript.endsWith(commandSource)).toBe(true);
       return makeFakeProcess({
         stdout: JSON.stringify({ ok: true, calendars: [] }),
         closeCode: 0,
