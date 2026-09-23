@@ -42,7 +42,7 @@ describe('lib/jxa-runner', () => {
     let tempScriptPath = null;
 
     const spawnMock = jest.fn((cmd, args, options) => {
-      expect(cmd).toBe('/usr/bin/osascript');
+      expect(cmd).toBe('osascript');
       expect(args[0]).toBe('-l');
       expect(args[1]).toBe('JavaScript');
       expect(args).toHaveLength(3);
